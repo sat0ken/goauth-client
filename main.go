@@ -1,6 +1,7 @@
 package main
 
 import (
+
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -10,12 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
 )
 
 const (
-	LOCAL         = false
+	LOCAL         = true
 	response_type = "code"
-	redirect_uri  = "http://127.0.0.1:8080/callback"
+	redirect_uri  = "http://localhost:8080/callback"
 	grant_type    = "authorization_code"
 
 	// https://tex2e.github.io/rfc-translater/html/rfc7636.html
@@ -86,10 +88,8 @@ func login(w http.ResponseWriter, req *http.Request) {
 	values.Add("redirect_uri", redirect_uri)
 
 	// PKCE用パラメータ
-	if !LOCAL {
-		values.Add("code_challenge_method", oauth.code_challenge_method)
-		values.Add("code_challenge", oauth.code_challenge)
-	}
+	values.Add("code_challenge_method", oauth.code_challenge_method)
+	values.Add("code_challenge", oauth.code_challenge)
 
 	// 認可エンドポイントにリダイレクト
 	http.Redirect(w, req, authEndpoint+values.Encode(), 302)
@@ -99,8 +99,10 @@ func login(w http.ResponseWriter, req *http.Request) {
 func callback(w http.ResponseWriter, req *http.Request) {
 
 	query := req.URL.Query()
+
 	// トークンをリクエストする
-	result, err := tokenRequest(query)
+	c, _ := req.Cookie("session")
+	result, err := tokenRequest(query, c)
 	if err != nil {
 		log.Println(err)
 	}
@@ -117,7 +119,7 @@ func callback(w http.ResponseWriter, req *http.Request) {
 
 }
 
-func tokenRequest(query url.Values) (map[string]interface{}, error) {
+func tokenRequest(query url.Values, c *http.Cookie) (map[string]interface{}, error) {
 
 	tokenEndpoint := oauth.tokenEndpoint
 	values := url.Values{}
@@ -128,17 +130,16 @@ func tokenRequest(query url.Values) (map[string]interface{}, error) {
 	// 取得した認可コードをトークンのリクエストにセット
 	values.Add("code", query.Get("code"))
 	values.Add("redirect_uri", redirect_uri)
-	// PKCE用パラメータ
-	if !LOCAL {
-		values.Add("code_verifier", verifier)
-	}
 
-	log.Printf("URL values: %s", values.Encode())
+	// PKCE用パラメータ
+	values.Add("code_verifier", verifier)
+
 
 	req, err := http.NewRequest("POST", tokenEndpoint, strings.NewReader(values.Encode()))
 	if err != nil {
 		return nil, err
 	}
+	req.AddCookie(c)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -147,12 +148,12 @@ func tokenRequest(query url.Values) (map[string]interface{}, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
+	log.Printf("token response : %s", string(body))
 	var data map[string]interface{}
 	json.Unmarshal(body, &data)
 
@@ -189,7 +190,11 @@ func apiRequest(req *http.Request, token string) ([]byte, error) {
 
 func main() {
 
-	log.Println("start server...")
+	if LOCAL {
+		log.Println("start server auth to local mode...")
+	} else {
+		log.Println("start server auth to google mode...")
+	}
 	readJson()
 	setUp()
 	http.HandleFunc("/login", login)
